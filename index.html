@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="RentBook"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="theme-color" content="#000000"/>
+<meta name="description" content="Premium Rent & Electricity Manager"/>
+<title>RentBook</title>
+<link rel="manifest" href="manifest.json"/>
+<link rel="icon" href="favicon.ico"/>
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png"/>
+<link rel="apple-touch-icon" href="apple-touch-icon.png"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, sans-serif; -webkit-font-smoothing: antialiased; transition: background 0.3s, color 0.3s; }
+  #root { height: 100%; }
+  input, button, select { font-family: inherit; }
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+  ::-webkit-scrollbar { width: 3px; height: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+  * { -webkit-tap-highlight-color: transparent; }
+
+  /* Night mode (default) */
+  body {
+    --bg: #000000;
+    --text: #ffffff;
+  }
+  /* Day mode */
+  body.day {
+    --bg: #f5f5f5;
+    --text: #111111;
+  }
+
+  #splash {
+    position: fixed; inset: 0; background: #000;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 9999; transition: opacity 0.5s ease;
+  }
+  #splash img { width: 120px; height: 120px; object-fit: contain; animation: splashPop 0.6s ease; }
+  #splash .sname { margin-top: 20px; font-size: 28px; font-weight: 800; letter-spacing: 2px; color: #fff; }
+  #splash .stag  { margin-top: 6px; font-size: 11px; font-weight: 400; letter-spacing: 4px; color: #555; text-transform: uppercase; }
+  @keyframes splashPop { from { transform: scale(0.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .splash-out { opacity: 0; pointer-events: none; }
+
+  @keyframes fadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+  .fade-up { animation: fadeUp 0.3s ease forwards; }
+</style>
+</head>
+<body>
+
+<div id="splash">
+  <img src="icon-512.png" alt="RentBook" onerror="this.style.display='none'"/>
+  <div class="sname">RENTBOOK</div>
+  <div class="stag">Rent · Track · Manage</div>
+</div>
+
+<div id="root"></div>
+
+<script>
+  setTimeout(() => {
+    const s = document.getElementById('splash');
+    if(s){ s.classList.add('splash-out'); setTimeout(()=>s.remove(), 500); }
+  }, 1800);
+</script>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo } = React;
+
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const SC = { Paid:"#22c55e", Partial:"#f59e0b", Pending:"#ef4444", Advance:"#8b5cf6" };
+const AVATAR_COLORS = ["#2a2a2a","#1e1e2e","#1a2a1a","#2a1a1a","#1a1a2e","#2a2a1a","#1e2a2a"];
+const today = new Date();
+const fmtD  = d => { const x=new Date(d); return `${x.getDate()} ${MONTHS[x.getMonth()]} ${x.getFullYear()}`; };
+const mkKey = (y,m) => `${y}-${String(m+1).padStart(2,"0")}`;
+const aColor = id => AVATAR_COLORS[id % AVATAR_COLORS.length];
+
+function deriveStatus(paid, payable) {
+  const p = Number(paid), t = Number(payable);
+  if (p <= 0)  return { status:"Pending", baki:t,   advance:0 };
+  if (p < t)   return { status:"Partial", baki:t-p, advance:0 };
+  if (p === t) return { status:"Paid",    baki:0,   advance:0 };
+  return              { status:"Advance", baki:0,   advance:p-t };
+}
+
+const DEFAULT_TENANTS = [
+  {id:1,name:"Rahul Sharma",room:"101",rent:8000,phone:"9876543210",joinDate:"2024-01-01",baseReading:0},
+  {id:2,name:"Priya Singh", room:"102",rent:7500,phone:"9812345678",joinDate:"2024-03-01",baseReading:0},
+  {id:3,name:"Amit Kumar",  room:"201",rent:9000,phone:"9900112233",joinDate:"2023-11-01",baseReading:0},
+];
+
+function loadLS(key, def) {
+  try { const v=localStorage.getItem(key); return v?JSON.parse(v):def; } catch(e){ return def; }
+}
+function saveLS(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch(e){}
+}
+
+let _tenants  = loadLS("rb_tenants",  DEFAULT_TENANTS);
+let _records  = loadLS("rb_records",  {});
+let _settings = loadLS("rb_settings", { rate: 8 });
+let _nextId   = loadLS("rb_nextId",   4);
+
+const getRec  = (tid,yk) => _records[`${tid}_${yk}`] || null;
+const saveRec = r => { _records[`${r.tenantId}_${r.monthKey}`] = r; saveLS("rb_records", _records); };
+
+function buildRec(tenant, yk, prevReading, carryFwd) {
+  const total = tenant.rent + carryFwd;
+  return { tenantId:tenant.id, monthKey:yk, rent:tenant.rent,
+    elecPrevReading:prevReading, elecCurrReading:prevReading,
+    elecUnits:0, elecBill:0, totalPayable:total, amountPaid:0,
+    status:"Pending", baki:total, advance:0, carryFwd, paymentDates:[] };
+}
+
+function recalc(r) {
+  r.totalPayable = r.rent + r.elecBill + r.carryFwd;
+  const d = deriveStatus(r.amountPaid, r.totalPayable);
+  r.status=d.status; r.baki=d.baki; r.advance=d.advance;
+  return r;
+}
+
+function ensureRec(tenantId, yk) {
+  if (getRec(tenantId,yk)) return getRec(tenantId,yk);
+  const tenant = _tenants.find(t=>t.id===tenantId);
+  if (!tenant) return null;
+  const [y,mo] = yk.split("-").map(Number);
+  const pd = new Date(y,mo-2,1);
+  const prev = getRec(tenantId, mkKey(pd.getFullYear(),pd.getMonth()));
+  const prevReading = prev ? prev.elecCurrReading : (tenant.baseReading||0);
+  let carryFwd = 0;
+  if (prev) {
+    if (prev.status==="Advance") carryFwd = -prev.advance;
+    else if (prev.baki>0)        carryFwd = prev.baki;
+  }
+  const r = buildRec(tenant, yk, prevReading, carryFwd);
+  saveRec(r); return r;
+}
+
+// Icons
+const Icon = {
+  Home:    ()=><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+  Users:   ()=><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+  Card:    ()=><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>,
+  History: ()=><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+  Settings:()=><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>,
+  Plus:    ()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+  Edit:    ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg>,
+  Trash:   ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>,
+  Bolt:    ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
+  WA:      ()=><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z"/></svg>,
+  Check:   ()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+  ChevL:   ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>,
+  ChevR:   ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>,
+  Sun:     ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
+  Moon:    ()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
+};
+
+// ── Style helpers (day/night aware) ──────────────────────────────────────────
+const D = {
+  card:     d => ({ background:d?"#fff":"#0d0d0d",  border:`1px solid ${d?"#e0e0e0":"#1a1a1a"}`, borderRadius:14, padding:"14px", marginBottom:10 }),
+  infoBox:  d => ({ background:d?"#f5f5f5":"#111",  border:`1px solid ${d?"#e0e0e0":"#1e1e1e"}`, borderRadius:8, padding:"8px 12px", fontSize:12, color:d?"#555":"#888", lineHeight:1.6 }),
+  text:     d => d?"#111":"#fff",
+  sub:      d => d?"#777":"#555",
+  faint:    d => d?"#999":"#444",
+  navBg:    d => d?"#fff":"#000",
+  navBdr:   d => d?"#e0e0e0":"#111",
+  navTxt:   d => d?"#aaa":"#444",
+  navAct:   d => d?"#111":"#fff",
+  btnBg:    d => d?"#f0f0f0":"#111",
+  btnBdr:   d => d?"#ddd":"#1e1e1e",
+  inputBg:  d => d?"#f0f0f0":"#0a0a0a",
+  inputBdr: d => d?"#d0d0d0":"#1e1e1e",
+  divider:  d => d?"#e0e0e0":"#1a1a1a",
+  rowBdr:   d => d?"#eee":"#111",
+};
+
+function App() {
+  const [tenants,  setTenants]  = useState([..._tenants]);
+  const [settings, setSettings] = useState({..._settings});
+  const [tab,      setTab]      = useState("dashboard");
+  const [vm,       setVm]       = useState({y:today.getFullYear(), m:today.getMonth()});
+  const [modal,    setModal]    = useState(null);
+  const [toast,    setToast]    = useState(null);
+  const [tick,     setTick]     = useState(0);
+  const [day,      setDay]      = useState(() => loadLS("rb_day", false));
+  const refresh = () => setTick(n=>n+1);
+
+  useEffect(() => {
+    document.body.classList.toggle("day", day);
+    saveLS("rb_day", day);
+  }, [day]);
+
+  const showToast = (msg, ok=true) => { setToast({msg,ok}); setTimeout(()=>setToast(null),2500); };
+
+  useEffect(() => {
+    _tenants.forEach(t => ensureRec(t.id, mkKey(vm.y,vm.m)));
+    refresh();
+  }, [vm, tenants]);
+
+  const yk   = mkKey(vm.y, vm.m);
+  const recs = useMemo(() => _tenants.map(t => getRec(t.id,yk)||ensureRec(t.id,yk)), [tick,vm,tenants]);
+
+  // ── FIX 1: Accumulate payments (+=) not overwrite (=) ─────────────────────
+  const doPayment = (tid, amount, yk) => {
+    const r = getRec(tid,yk) || ensureRec(tid,yk);
+    r.amountPaid = r.amountPaid + Number(amount);   // ACCUMULATE
+    recalc(r);
+    r.paymentDates = [...r.paymentDates, {date:new Date().toISOString(), amount:Number(amount)}];
+    saveRec(r); saveLS("rb_records",_records); refresh();
+    showToast(`Saved · ${r.status}`);
+  };
+
+  const doElec = (tid,curr,yk) => {
+    const r=getRec(tid,yk)||ensureRec(tid,yk);
+    const units=Math.max(0,Number(curr)-r.elecPrevReading);
+    r.elecCurrReading=Number(curr); r.elecUnits=units; r.elecBill=units*_settings.rate;
+    recalc(r); saveRec(r); saveLS("rb_records",_records); refresh(); showToast("Electricity updated");
+  };
+  const doAdd = d => {
+    const t={id:_nextId++,...d,rent:Number(d.rent),baseReading:Number(d.baseReading||0)};
+    _tenants=[..._tenants,t]; saveLS("rb_tenants",_tenants); saveLS("rb_nextId",_nextId);
+    setTenants([..._tenants]); showToast("Tenant added");
+  };
+  const doEdit = (id,d) => {
+    _tenants=_tenants.map(t=>t.id===id?{...t,...d,rent:Number(d.rent),baseReading:Number(d.baseReading||0)}:t);
+    Object.values(_records).forEach(r=>{if(r.tenantId===id){r.rent=Number(d.rent);recalc(r);}});
+    saveLS("rb_tenants",_tenants); saveLS("rb_records",_records);
+    setTenants([..._tenants]); showToast("Updated");
+  };
+  const doDel = id => { _tenants=_tenants.filter(t=>t.id!==id); saveLS("rb_tenants",_tenants); setTenants([..._tenants]); showToast("Removed",false); };
+  const doSettings = s => { _settings=s; saveLS("rb_settings",s); setSettings({...s}); showToast("Saved"); };
+
+  const prevM = ()=>setVm(({y,m})=>m===0?{y:y-1,m:11}:{y,m:m-1});
+  const nextM = ()=>setVm(({y,m})=>m===11?{y:y+1,m:0}:{y,m:m+1});
+
+  const stats = useMemo(()=>({
+    payable:   recs.reduce((s,r)=>s+(r?.totalPayable||0),0),
+    collected: recs.reduce((s,r)=>s+Math.min(r?.amountPaid||0,r?.totalPayable||0),0),
+    pending:   recs.reduce((s,r)=>s+(r?.baki||0),0),
+    advance:   recs.reduce((s,r)=>s+(r?.advance||0),0),
+  }),[tick,recs]);
+
+  const TABS=[
+    {id:"dashboard",icon:<Icon.Home/>,    lbl:"Home"},
+    {id:"tenants",  icon:<Icon.Users/>,   lbl:"Tenants"},
+    {id:"payments", icon:<Icon.Card/>,    lbl:"Pay"},
+    {id:"history",  icon:<Icon.History/>, lbl:"History"},
+    {id:"settings", icon:<Icon.Settings/>,lbl:"More"},
+  ];
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",height:"100vh",background:day?"#f5f5f5":"#000",overflow:"hidden"}}>
+      {/* Header */}
+      <header style={{background:D.navBg(day),borderBottom:`1px solid ${D.navBdr(day)}`,padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:50}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <img src="icon-192.png" style={{width:28,height:28,objectFit:"contain"}} alt="" onError={e=>e.target.style.display='none'}/>
+          <span style={{fontWeight:900,fontSize:15,letterSpacing:3,color:D.text(day)}}>RENTBOOK</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {["dashboard","payments","history"].includes(tab) && (
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <button style={{background:D.btnBg(day),border:`1px solid ${D.btnBdr(day)}`,color:D.text(day),width:30,height:30,borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={prevM}><Icon.ChevL/></button>
+              <span style={{fontWeight:700,fontSize:13,minWidth:90,textAlign:"center",color:D.text(day)}}>{MONTHS[vm.m]} {vm.y}</span>
+              <button style={{background:D.btnBg(day),border:`1px solid ${D.btnBdr(day)}`,color:D.text(day),width:30,height:30,borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}} onClick={nextM}><Icon.ChevR/></button>
+            </div>
+          )}
+          {/* Day/Night toggle */}
+          <button onClick={()=>setDay(d=>!d)} title={day?"Night mode":"Day mode"}
+            style={{background:D.btnBg(day),border:`1px solid ${D.btnBdr(day)}`,color:D.text(day),width:34,height:34,borderRadius:10,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+            {day ? <Icon.Moon/> : <Icon.Sun/>}
+          </button>
+        </div>
+      </header>
+
+      {/* Content */}
+      <main style={{flex:1,overflowY:"auto",padding:"0 0 80px"}}>
+        <div style={{maxWidth:520,margin:"0 auto",padding:"16px 14px"}}>
+          {tab==="dashboard" && <Dashboard tenants={tenants} recs={recs} stats={stats} vm={vm} day={day}/>}
+          {tab==="tenants"   && <Tenants   tenants={tenants} onAdd={()=>setModal({t:"add"})} onEdit={t=>setModal({t:"edit",data:t})} onDel={doDel} day={day}/>}
+          {tab==="payments"  && <Payments  tenants={tenants} recs={recs} yk={yk} settings={settings} vm={vm} onPayment={doPayment} onElec={doElec} day={day}/>}
+          {tab==="history"   && <History   tenants={tenants} vm={vm} day={day}/>}
+          {tab==="settings"  && <Settings  settings={settings} onSave={doSettings} day={day}/>}
+        </div>
+      </main>
+
+      {/* Bottom Nav */}
+      <nav style={{position:"fixed",bottom:0,left:0,right:0,background:D.navBg(day),borderTop:`1px solid ${D.navBdr(day)}`,display:"flex",padding:"8px 0 calc(8px + env(safe-area-inset-bottom))",zIndex:50}}>
+        {TABS.map(t=>(
+          <button key={t.id} style={{flex:1,background:"none",border:"none",color:tab===t.id?D.navAct(day):D.navTxt(day),cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"4px 0",fontSize:13}} onClick={()=>setTab(t.id)}>
+            {t.icon}
+            <span style={{fontSize:9,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{t.lbl}</span>
+          </button>
+        ))}
+      </nav>
+
+      {modal?.t==="add"  && <TenantModal mode="add"  onClose={()=>setModal(null)} onSave={d=>{doAdd(d);setModal(null);}} day={day}/>}
+      {modal?.t==="edit" && <TenantModal mode="edit" existing={modal.data} onClose={()=>setModal(null)} onSave={d=>{doEdit(modal.data.id,d);setModal(null);}} day={day}/>}
+
+      {toast && (
+        <div style={{position:"fixed",bottom:90,left:"50%",transform:"translateX(-50%)",color:"#000",fontWeight:700,fontSize:13,padding:"10px 20px",borderRadius:20,zIndex:300,boxShadow:"0 4px 20px rgba(0,0,0,0.5)",display:"flex",alignItems:"center",gap:8,whiteSpace:"nowrap",background:toast.ok?"#22c55e":"#ef4444"}}>
+          <Icon.Check/> {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Dashboard
+function Dashboard({tenants,recs,stats,vm,day}){
+  const pct = stats.payable>0 ? Math.round((stats.collected/stats.payable)*100) : 0;
+  return (
+    <div className="fade-up">
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+        {[
+          {label:"Expected",  val:`₹${stats.payable.toLocaleString()}`,   color:D.text(day),   sub:"This month"},
+          {label:"Collected", val:`₹${stats.collected.toLocaleString()}`, color:SC.Paid,       sub:`${pct}% done`},
+          {label:"Pending",   val:`₹${stats.pending.toLocaleString()}`,   color:SC.Pending,    sub:"Due"},
+          {label:"Advance",   val:`₹${stats.advance.toLocaleString()}`,   color:SC.Advance,    sub:"Carry next"},
+        ].map(s=>(
+          <div key={s.label} style={{...D.card(day),padding:"14px"}}>
+            <div style={{fontSize:10,fontWeight:600,letterSpacing:1.5,color:D.faint(day),textTransform:"uppercase",marginBottom:8}}>{s.label}</div>
+            <div style={{fontSize:20,fontWeight:800,color:s.color,lineHeight:1}}>{s.val}</div>
+            <div style={{fontSize:11,color:D.faint(day),marginTop:6}}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+      <div style={D.card(day)}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <span style={{fontSize:12,fontWeight:600,color:D.faint(day),letterSpacing:1,textTransform:"uppercase"}}>Collection</span>
+          <span style={{fontSize:14,fontWeight:700,color:pct===100?SC.Paid:D.text(day)}}>{pct}%</span>
+        </div>
+        <div style={{background:day?"#e0e0e0":"#1a1a1a",borderRadius:99,height:5,overflow:"hidden"}}>
+          <div style={{background:pct===100?"#22c55e":D.text(day),height:"100%",width:`${pct}%`,borderRadius:99,transition:"width 0.6s ease"}}/>
+        </div>
+      </div>
+      <div style={{fontSize:11,fontWeight:600,letterSpacing:1.5,color:D.faint(day),textTransform:"uppercase",marginBottom:10}}>Tenants — {MONTHS[vm.m]}</div>
+      {tenants.map((t,i)=>{
+        const r=recs[i]; if(!r) return null;
+        return (
+          <div key={t.id} style={{...D.card(day),marginBottom:8,display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:40,height:40,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:15,color:"#fff",flexShrink:0,background:aColor(t.id)}}>{t.name[0]}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:600,fontSize:14,color:D.text(day)}}>{t.name}</div>
+              <div style={{fontSize:12,color:D.sub(day),marginTop:2}}>Room {t.room}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:11,fontWeight:700,padding:"3px 8px",borderRadius:20,background:`${SC[r.status]}18`,color:SC[r.status]}}>{r.status}</div>
+              <div style={{fontSize:11,color:D.sub(day),marginTop:4}}>₹{r.amountPaid.toLocaleString()} / ₹{r.totalPayable.toLocaleString()}</div>
+              {r.baki>0 && <div style={{fontSize:10,color:SC.Pending,marginTop:2}}>₹{r.baki.toLocaleString()} baki</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Tenants
+function Tenants({tenants,onAdd,onEdit,onDel,day}){
+  return (
+    <div className="fade-up">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div style={{fontWeight:800,fontSize:18,color:D.text(day)}}>Tenants <span style={{color:D.faint(day),fontWeight:400}}>({tenants.length})</span></div>
+        <button style={{background:D.text(day),border:"none",color:day?"#fff":"#000",padding:"8px 14px",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",gap:6}} onClick={onAdd}><Icon.Plus/> Add</button>
+      </div>
+      {tenants.length===0 && <div style={{textAlign:"center",padding:"48px 20px",color:D.faint(day),fontSize:14}}>No tenants yet. Tap Add to get started.</div>}
+      {tenants.map(t=>(
+        <div key={t.id} style={{...D.card(day),marginBottom:8,display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:40,height:40,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:15,color:"#fff",flexShrink:0,background:aColor(t.id)}}>{t.name[0]}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:600,fontSize:14,color:D.text(day)}}>{t.name}</div>
+            <div style={{fontSize:12,color:D.sub(day),marginTop:2}}>Room {t.room} · ₹{Number(t.rent).toLocaleString()}/mo</div>
+            <div style={{fontSize:11,color:D.faint(day),marginTop:2}}>📞 {t.phone}</div>
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>onEdit(t)} style={{background:D.btnBg(day),border:"none",color:D.text(day),width:32,height:32,borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Icon.Edit/></button>
+            <button onClick={()=>{if(window.confirm(`Delete ${t.name}?`))onDel(t.id);}} style={{background:day?"#fff0f0":"#1e0a0a",border:"none",color:SC.Pending,width:32,height:32,borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><Icon.Trash/></button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Payments
+function Payments({tenants,recs,yk,settings,vm,onPayment,onElec,day}){
+  const [active,  setActive]  = useState(null);
+  const [payVal,  setPayVal]  = useState("");
+  const [elecVal, setElecVal] = useState("");
+
+  const tenant = tenants.find(t=>t.id===active);
+  const rec    = recs.find(r=>r?.tenantId===active);
+  const mLabel = `${MONTHS[vm.m]} ${vm.y}`;
+
+  const sendWA = () => {
+    if(!tenant||!rec) return;
+    const phone = "91"+tenant.phone.replace(/\D/g,"").slice(-10);
+    const msg = rec.status==="Pending"
+      ? `Namaskar ${tenant.name} ji 🙏\n\n${mLabel} ka kiraya pending hai.\n\n💰 Total: ₹${rec.totalPayable.toLocaleString()}\n\nKripya jald payment karein.\nDhanyawad 🙏`
+      : `Namaskar ${tenant.name} ji 🙏\n\n${mLabel} ka kiraya aadha baki hai.\n\n✅ Diya: ₹${rec.amountPaid.toLocaleString()}\n⏳ Baki: ₹${rec.baki.toLocaleString()}\n💰 Total: ₹${rec.totalPayable.toLocaleString()}\n\nKripya baaki payment karein.\nDhanyawad 🙏`;
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`,"_blank");
+  };
+
+  const Inp = ({...p}) => <input style={{background:D.inputBg(day),border:`1px solid ${D.inputBdr(day)}`,borderRadius:10,padding:"11px 13px",color:D.text(day),fontSize:14,width:"100%",outline:"none"}} {...p}/>;
+  const PBtn = ({style,children,...p}) => <button style={{background:D.text(day),border:"none",color:day?"#fff":"#000",padding:"12px",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,width:"100%",...style}} {...p}>{children}</button>;
+
+  return (
+    <div className="fade-up">
+      {/* Tenant chips */}
+      <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,marginBottom:16,scrollbarWidth:"none"}}>
+        {tenants.map(t=>{
+          const r=recs.find(r=>r?.tenantId===t.id);
+          const on=active===t.id;
+          return (
+            <button key={t.id} onClick={()=>{setActive(t.id);setPayVal("");setElecVal("");}}
+              style={{flexShrink:0,background:on?D.text(day):D.btnBg(day),border:`1px solid ${on?D.text(day):D.btnBdr(day)}`,borderRadius:12,padding:"8px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4,minWidth:64,transition:"all 0.2s"}}>
+              <div style={{width:30,height:30,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:12,background:on?(day?"#333":"#000"):aColor(t.id),color:on?(day?"#fff":"#fff"):"#fff"}}>{t.name[0]}</div>
+              <div style={{fontSize:11,fontWeight:600,color:on?(day?"#fff":"#000"):(day?"#555":"#888")}}>{t.name.split(" ")[0]}</div>
+              {r && <div style={{width:6,height:6,borderRadius:99,background:SC[r.status]}}/>}
+            </button>
+          );
+        })}
+      </div>
+
+      {!active && <div style={{textAlign:"center",padding:"48px 20px",color:D.faint(day),fontSize:14}}>Select a tenant above to record payment</div>}
+
+      {tenant && rec && (
+        <div>
+          {/* Bill summary */}
+          <div style={D.card(day)}>
+            <div style={{fontSize:11,fontWeight:600,letterSpacing:1.5,color:D.faint(day),textTransform:"uppercase",marginBottom:12}}>Bill Summary · {mLabel}</div>
+            {[
+              {lbl:"Base Rent",                                        val:`₹${rec.rent.toLocaleString()}`},
+              {lbl:`Electricity · ${rec.elecUnits} units × ₹${settings.rate}`, val:`₹${rec.elecBill.toLocaleString()}`},
+              rec.carryFwd>0 && {lbl:"Carry Forward (due)",           val:`+₹${rec.carryFwd.toLocaleString()}`, color:SC.Pending},
+              rec.carryFwd<0 && {lbl:"Advance Credit",                val:`-₹${Math.abs(rec.carryFwd).toLocaleString()}`, color:SC.Paid},
+            ].filter(Boolean).map((row,i)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:13,padding:"4px 0"}}>
+                <span style={{color:D.sub(day)}}>{row.lbl}</span>
+                <span style={{color:row.color||D.text(day)}}>{row.val}</span>
+              </div>
+            ))}
+            <div style={{borderTop:`1px solid ${D.divider(day)}`,margin:"10px 0"}}/>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:13,padding:"4px 0",fontWeight:700}}>
+              <span style={{color:D.sub(day)}}>Total Payable</span><span style={{color:D.text(day)}}>₹{rec.totalPayable.toLocaleString()}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:13,padding:"4px 0",fontWeight:700}}>
+              <span style={{color:D.sub(day)}}>Paid</span><span style={{color:SC[rec.status]}}>₹{rec.amountPaid.toLocaleString()}</span>
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:14,flexWrap:"wrap",alignItems:"center"}}>
+              <span style={{display:"inline-flex",alignItems:"center",padding:"5px 14px",borderRadius:20,background:`${SC[rec.status]}18`,color:SC[rec.status],fontSize:12,fontWeight:700}}>{rec.status}</span>
+              {rec.baki>0    && <span style={{display:"inline-flex",padding:"3px 10px",borderRadius:20,background:day?"#fff0f0":"#1a0a0a",color:SC.Pending,fontSize:12}}>⏳ ₹{rec.baki.toLocaleString()} baki</span>}
+              {rec.advance>0 && <span style={{display:"inline-flex",padding:"3px 10px",borderRadius:20,background:day?"#f0eeff":"#0d0a1a",color:SC.Advance,fontSize:12}}>🔄 ₹{rec.advance.toLocaleString()} advance</span>}
+            </div>
+            {rec.advance>0 && <div style={{marginTop:10,fontSize:12,color:D.sub(day),textAlign:"center"}}>Next month mein ₹{rec.advance.toLocaleString()} auto-adjust hoga</div>}
+          </div>
+
+          {/* Electricity */}
+          <div style={D.card(day)}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:12,fontWeight:600,letterSpacing:1,color:D.faint(day),textTransform:"uppercase"}}>
+              <span style={{color:D.faint(day)}}><Icon.Bolt/></span>Electricity Reading
+            </div>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+              <div style={{flex:1,background:day?"#f5f5f5":"#0a0a0a",borderRadius:10,padding:"10px 12px",textAlign:"center",border:`1px solid ${D.divider(day)}`}}>
+                <div style={{fontSize:10,color:D.faint(day),marginBottom:4,letterSpacing:1}}>PREVIOUS</div>
+                <div style={{fontSize:20,fontWeight:700,color:D.text(day)}}>{rec.elecPrevReading}</div>
+              </div>
+              <div style={{color:D.faint(day),fontSize:16}}>→</div>
+              <div style={{flex:1.4}}><Inp type="number" placeholder="Current reading" value={elecVal} onChange={e=>setElecVal(e.target.value)}/></div>
+            </div>
+            {elecVal && Number(elecVal)>=rec.elecPrevReading && (
+              <div style={{...D.infoBox(day),marginBottom:10}}>
+                {Number(elecVal)-rec.elecPrevReading} units × ₹{settings.rate} = <b>₹{(Number(elecVal)-rec.elecPrevReading)*settings.rate}</b>
+              </div>
+            )}
+            {elecVal && Number(elecVal)<rec.elecPrevReading && (
+              <div style={{...D.infoBox(day),background:day?"#fff0f0":"#1a0a0a",color:SC.Pending,marginBottom:10}}>⚠️ Current reading previous se kam nahi ho sakta</div>
+            )}
+            <PBtn onClick={()=>{if(!elecVal||Number(elecVal)<rec.elecPrevReading)return;onElec(tenant.id,elecVal,yk);setElecVal("");}}>Update Electricity</PBtn>
+          </div>
+
+          {/* Payment */}
+          <div style={D.card(day)}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:12,fontWeight:600,letterSpacing:1,color:D.faint(day),textTransform:"uppercase"}}>
+              <span style={{color:D.faint(day)}}><Icon.Card/></span>Record Payment
+            </div>
+            <Inp type="number" placeholder={`Amount paid · Total ₹${rec.totalPayable}`} value={payVal} onChange={e=>setPayVal(e.target.value)}/>
+            {/* FIX 2: Preview uses accumulated total = rec.amountPaid + Number(payVal) */}
+            {payVal && (() => {
+              const totalAfter = rec.amountPaid + Number(payVal);
+              const d = deriveStatus(totalAfter, rec.totalPayable);
+              return (
+                <div style={{...D.infoBox(day),marginTop:8,color:SC[d.status]}}>
+                  ₹{rec.amountPaid.toLocaleString()} + ₹{Number(payVal).toLocaleString()} = ₹{totalAfter.toLocaleString()} → <b>{d.status}</b>
+                  {d.status==="Partial" && <span style={{color:D.sub(day)}}> · ₹{d.baki.toLocaleString()} baki rahega</span>}
+                  {d.status==="Advance" && <span style={{color:D.sub(day)}}> · ₹{d.advance.toLocaleString()} advance</span>}
+                </div>
+              );
+            })()}
+            <PBtn style={{marginTop:10,background:"#22c55e",color:"#000"}} onClick={()=>{if(!payVal)return;onPayment(tenant.id,payVal,yk);setPayVal("");}}>Save Payment</PBtn>
+          </div>
+
+          {/* WhatsApp */}
+          {(rec.status==="Pending"||rec.status==="Partial") && tenant.phone && (
+            <button onClick={sendWA} style={{width:"100%",background:"#075e54",border:"none",borderRadius:14,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,marginBottom:12,cursor:"pointer",color:"#fff"}}>
+              <div style={{color:"#25d366",flexShrink:0}}><Icon.WA/></div>
+              <div style={{flex:1,textAlign:"left"}}>
+                <div style={{fontWeight:700,fontSize:14,color:"#fff"}}>Send WhatsApp Reminder</div>
+                <div style={{fontSize:11,color:"#25d366",marginTop:2}}>{rec.status==="Pending"?`₹${rec.totalPayable.toLocaleString()} pending`:`₹${rec.baki.toLocaleString()} baki`} · {tenant.name}</div>
+              </div>
+              <span style={{color:"#25d366",fontSize:16}}>→</span>
+            </button>
+          )}
+
+          {/* Payment log */}
+          {rec.paymentDates.length>0 && (
+            <div style={D.card(day)}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:12,fontWeight:600,letterSpacing:1,color:D.faint(day),textTransform:"uppercase"}}>
+                <span style={{color:D.faint(day)}}><Icon.History/></span>This Month Payments
+              </div>
+              {rec.paymentDates.map((p,i)=>(
+                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${D.rowBdr(day)}`,fontSize:13}}>
+                  <span style={{color:D.sub(day)}}>{fmtD(p.date)}</span>
+                  <span style={{color:SC.Paid,fontWeight:600}}>₹{p.amount.toLocaleString()}</span>
+                </div>
+              ))}
+              <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0 0",fontSize:13,fontWeight:700}}>
+                <span style={{color:D.sub(day)}}>Total Paid</span>
+                <span style={{color:SC[rec.status]}}>₹{rec.amountPaid.toLocaleString()}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// History
+function History({tenants,vm,day}){
+  const [filter,setFilter] = useState("all");
+  let {y,m} = vm;
+  const months = [];
+  for(let i=0;i<6;i++){ months.push(mkKey(y,m)); if(m===0){y--;m=11;}else m--; }
+  const list = filter==="all" ? tenants : tenants.filter(t=>t.id===Number(filter));
+  return (
+    <div className="fade-up">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div style={{fontWeight:800,fontSize:18,color:D.text(day)}}>History</div>
+        <select style={{background:D.btnBg(day),border:`1px solid ${D.btnBdr(day)}`,borderRadius:8,padding:"6px 10px",color:D.text(day),fontSize:12}} value={filter} onChange={e=>setFilter(e.target.value)}>
+          <option value="all">All Tenants</option>
+          {tenants.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      </div>
+      {list.map(t=>(
+        <div key={t.id} style={{...D.card(day),marginBottom:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+            <div style={{width:40,height:40,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:15,color:"#fff",flexShrink:0,background:aColor(t.id)}}>{t.name[0]}</div>
+            <div>
+              <div style={{fontWeight:600,fontSize:14,color:D.text(day)}}>{t.name}</div>
+              <div style={{fontSize:12,color:D.sub(day)}}>Room {t.room}</div>
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1.2fr",fontSize:10,fontWeight:700,letterSpacing:1,color:D.faint(day),textTransform:"uppercase",marginBottom:8,paddingBottom:8,borderBottom:`1px solid ${D.divider(day)}`}}>
+            <span>Month</span><span>Payable</span><span>Paid</span><span>Status</span>
+          </div>
+          {months.map(mk=>{
+            const r=getRec(t.id,mk);
+            const [yr,mo]=mk.split("-");
+            const lbl=`${MONTHS[parseInt(mo)-1]} ${yr}`;
+            if(!r) return <div key={mk} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1.2fr",padding:"5px 0",fontSize:12,color:D.faint(day),borderBottom:`1px solid ${D.rowBdr(day)}`}}><span>{lbl}</span><span>—</span><span>—</span><span>—</span></div>;
+            return <div key={mk} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1.2fr",padding:"5px 0",fontSize:12,borderBottom:`1px solid ${D.rowBdr(day)}`}}>
+              <span style={{color:D.sub(day)}}>{lbl}</span>
+              <span style={{color:D.text(day)}}>₹{r.totalPayable.toLocaleString()}</span>
+              <span style={{color:D.text(day)}}>₹{r.amountPaid.toLocaleString()}</span>
+              <span style={{color:SC[r.status],fontWeight:700}}>{r.status}</span>
+            </div>;
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Settings
+function Settings({settings,onSave,day}){
+  const [rate,setRate] = useState(settings.rate);
+  const Inp = ({...p}) => <input style={{background:D.inputBg(day),border:`1px solid ${D.inputBdr(day)}`,borderRadius:10,padding:"11px 13px",color:D.text(day),fontSize:14,width:"100%",outline:"none"}} {...p}/>;
+  const PBtn = ({style,children,...p}) => <button style={{background:D.text(day),border:"none",color:day?"#fff":"#000",padding:"12px",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,width:"100%",...style}} {...p}>{children}</button>;
+  return (
+    <div className="fade-up">
+      <div style={{fontWeight:800,fontSize:18,color:D.text(day),marginBottom:16}}>Settings</div>
+      <div style={D.card(day)}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:12,fontWeight:600,letterSpacing:1,color:D.faint(day),textTransform:"uppercase"}}><span><Icon.Bolt/></span>Electricity Rate</div>
+        <div style={{fontSize:12,color:D.sub(day),marginBottom:10}}>Current: ₹{settings.rate} per unit</div>
+        <Inp type="number" value={rate} onChange={e=>setRate(e.target.value)} placeholder="Rate per unit"/>
+        <PBtn style={{marginTop:10}} onClick={()=>onSave({rate:Number(rate)})}>Save Settings</PBtn>
+      </div>
+      <div style={D.card(day)}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:12,fontWeight:600,letterSpacing:1,color:D.faint(day),textTransform:"uppercase"}}><span><Icon.Check/></span>How It Works</div>
+        {["Payments accumulate — multiple payments add up correctly","Partial pay → baki clearly shown","Extra paid → Advance (auto-adjust next month)","Pending → carry forward to next month","Electricity: curr − prev = units × rate","WhatsApp reminder for Pending/Partial tenants"].map((x,i)=>(
+          <div key={i} style={{fontSize:12,color:D.sub(day),padding:"5px 0",borderBottom:`1px solid ${D.rowBdr(day)}`,display:"flex",gap:8,alignItems:"flex-start"}}>
+            <span style={{color:SC.Paid,flexShrink:0,marginTop:1}}><Icon.Check/></span>{x}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Tenant Modal
+function TenantModal({mode,existing,onClose,onSave,day}){
+  const isEdit = mode==="edit";
+  const [form,setForm] = useState(existing
+    ? {name:existing.name,room:existing.room,rent:existing.rent,phone:existing.phone,joinDate:existing.joinDate,baseReading:existing.baseReading||0}
+    : {name:"",room:"",rent:"",phone:"",joinDate:new Date().toISOString().split("T")[0],baseReading:0}
+  );
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+  const Inp = ({...p}) => <input style={{background:D.inputBg(day),border:`1px solid ${D.inputBdr(day)}`,borderRadius:10,padding:"11px 13px",color:D.text(day),fontSize:14,width:"100%",outline:"none"}} {...p}/>;
+  const PBtn = ({style,children,...p}) => <button style={{background:D.text(day),border:"none",color:day?"#fff":"#000",padding:"12px",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,width:"100%",...style}} {...p}>{children}</button>;
+  const fields=[
+    {k:"name",       lbl:"Full Name",           ph:"Tenant name",     type:"text"},
+    {k:"room",       lbl:"Room Number",          ph:"e.g. 101",        type:"text"},
+    {k:"rent",       lbl:"Monthly Rent (₹)",     ph:"e.g. 8000",       type:"number"},
+    {k:"phone",      lbl:"Phone (WhatsApp)",      ph:"10-digit number", type:"tel"},
+    {k:"joinDate",   lbl:"Join Date",             ph:"",               type:"date"},
+    {k:"baseReading",lbl:"Meter Reading at Join", ph:"e.g. 1250",      type:"number"},
+  ];
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:200}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:day?"#fff":"#0d0d0d",border:`1px solid ${day?"#e0e0e0":"#1a1a1a"}`,borderRadius:"20px 20px 0 0",padding:"20px 16px 40px",width:"100%",maxWidth:480,maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <div style={{fontWeight:700,fontSize:16,color:D.text(day)}}>{isEdit?"Edit Tenant":"New Tenant"}</div>
+          <button style={{background:D.btnBg(day),border:"none",color:D.sub(day),width:30,height:30,borderRadius:8,cursor:"pointer",fontSize:16}} onClick={onClose}>✕</button>
+        </div>
+        {!isEdit && <div style={{...D.infoBox(day),marginBottom:16}}>💡 Meter Reading at Join = jab tenant aaya tab meter pe jo reading thi.</div>}
+        {fields.map(f=>(
+          <div key={f.k} style={{marginBottom:14}}>
+            <div style={{fontSize:11,fontWeight:600,color:D.sub(day),marginBottom:6,letterSpacing:0.5}}>{f.lbl.toUpperCase()}</div>
+            <Inp type={f.type} placeholder={f.ph} value={form[f.k]} onChange={e=>set(f.k,e.target.value)}/>
+          </div>
+        ))}
+        <PBtn style={{marginTop:8}} onClick={()=>{ if(!form.name||!form.room||!form.rent)return alert("Name, Room aur Rent zaroori hai!"); onSave({...form}); }}>{isEdit?"Update Tenant":"Add Tenant"}</PBtn>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+<script>
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{ navigator.serviceWorker.register('./sw.js').catch(()=>{}); });
+}
+</script>
+</body>
+</html>
